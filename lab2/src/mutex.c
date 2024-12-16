@@ -15,8 +15,9 @@ typedef struct {
     int start;
     int end;
     int length;
-    pthread_mutex_t* mutex;
 } ThreadData;
+
+pthread_mutex_t mutex;
 
 void handle_error(const char* msg) {
     write(STDERR_FILENO, msg, strlen(msg));
@@ -29,9 +30,9 @@ void* sum_arrays(void* arg) {
 
     for (int i = data->start; i < data->end; i++) {
         for (int j = 0; j < data->length; j++) {
-            pthread_mutex_lock(data->mutex);
+            pthread_mutex_lock(&mutex);
             data->result[j] += data->arrays[i][j];
-            pthread_mutex_unlock(data->mutex);
+            pthread_mutex_unlock(&mutex);
         }
     }
 
@@ -81,13 +82,11 @@ int main(int argc, char* argv[]) {
     int* result = (int*)calloc(array_length, sizeof(int));
     if (result == NULL) handle_error("Error allocating memory for result.");
 
-    pthread_t threads[num_threads];
-    pthread_mutex_t mutex;
-
     if (pthread_mutex_init(&mutex, NULL) != 0) {
         handle_error("Error initializing mutex.");
     }
 
+    pthread_t threads[num_threads];
     ThreadData thread_data[num_threads];
     int chunk_size = (num_arrays + num_threads - 1) / num_threads;
 
@@ -97,7 +96,6 @@ int main(int argc, char* argv[]) {
         thread_data[i].start = i * chunk_size;
         thread_data[i].end = (i + 1) * chunk_size > num_arrays ? num_arrays : (i + 1) * chunk_size;
         thread_data[i].length = array_length;
-        thread_data[i].mutex = &mutex;
 
         if (pthread_create(&threads[i], NULL, sum_arrays, &thread_data[i]) != 0) {
             handle_error("Error creating thread.");
