@@ -17,6 +17,8 @@ typedef struct {
     int length;
 } ThreadData;
 
+atomic_flag lock = ATOMIC_FLAG_INIT;
+
 void handle_error(const char* msg) {
     write(STDERR_FILENO, msg, strlen(msg));
     write(STDERR_FILENO, "\n", 1);
@@ -28,7 +30,9 @@ void* sum_arrays_atomic(void* arg) {
 
     for (int i = data->start; i < data->end; i++) {
         for (int j = 0; j < data->length; j++) {
+            while (atomic_flag_test_and_set(&lock));
             atomic_fetch_add(&data->result[j], data->arrays[i][j]);
+            atomic_flag_clear(&lock);
         }
     }
 
@@ -79,7 +83,6 @@ int main(int argc, char* argv[]) {
     if (result == NULL) handle_error("Error allocating memory for result.");
 
     pthread_t threads[num_threads];
-
     ThreadData thread_data[num_threads];
     int chunk_size = (num_arrays + num_threads - 1) / num_threads;
 
@@ -118,3 +121,4 @@ int main(int argc, char* argv[]) {
     free(result);
 
     return EXIT_SUCCESS;
+}
