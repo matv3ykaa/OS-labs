@@ -1,156 +1,149 @@
 #include <pthread.h>
-#include <unistd.h>
-#include <complex.h>
-#include <errno.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
+#include <stdio.h>
+#include <complex.h>
 #include <time.h>
 
-#define BUFFER_SIZE 1024
-#define MAX_SIZE 10000
+#define MAX_THREADS 32
+#define RAND_RANGE 10
+
+typedef double complex cplx;
+
+pthread_mutex_t mutex;
+cplx **result;
 
 typedef struct {
-    int row;
-    int col;
-    int size;
-    double complex (*aPtr)[MAX_SIZE];
-    double complex (*bPtr)[MAX_SIZE];
-    double complex (*cPtr)[MAX_SIZE];
-    pthread_mutex_t *mutex;
-} __dataThread;
+    size_t start_row;
+    size_t end_row;
+    size_t size;
+    cplx **matrix1;
+    cplx **matrix2;
+} ThreadArgs;
 
-void print_error(const char *msg) {
+void HandleError(const char *msg) {
     write(STDERR_FILENO, msg, strlen(msg));
-    write(STDERR_FILENO, strerror(errno), strlen(strerror(errno)));
-    write(STDERR_FILENO, "\n", 1);
     exit(EXIT_FAILURE);
 }
 
-void print_message(const char *msg) {
-    write(STDERR_FILENO, msg, strlen(msg));
+void AllocateMatrix(cplx ***matrix, size_t size) {
+    *matrix = malloc(size * sizeof(cplx *));
+    if (*matrix == NULL) {
+        HandleError("Ошибка выделения памяти для матрицы.\n");
+    }
+    for (size_t i = 0; i < size; i++) {
+        (*matrix)[i] = malloc(size * sizeof(cplx));
+        if ((*matrix)[i] == NULL) {
+            HandleError("Ошибка выделения памяти для строки матрицы.\n");
+        }
+    }
 }
 
-void* matrix_multiply(void* matrix) {
-    __dataThread* m = (__dataThread*)matrix;
-
-    double complex result = 0.0 + 0.0*I;
-
-    for (int index = 0; index < m->size; index++) {
-        result += m->aPtr[m->row][index] * m->bPtr[index][m->col];
+void FreeMatrix(cplx **matrix, size_t size) {
+    for (size_t i = 0; i < size; i++) {
+        free(matrix[i]);
     }
+    free(matrix);
+}
 
-    pthread_mutex_lock(m->mutex);
-    m->cPtr[m->row][m->col] = result;
-    pthread_mutex_unlock(m->mutex);
+cplx GenerateRandomComplex() {
+    double real = (rand() % (2 * RAND_RANGE + 1)) - RAND_RANGE;
+    double imag = (rand() % (2 * RAND_RANGE + 1)) - RAND_RANGE;
+    return real + imag * I;
+}
+
+void *MatrixMultiply(void *args) {
+    ThreadArgs *data = (ThreadArgs *)args;
+
+    for (size_t i = data->start_row; i < data->end_row; i++) {
+        for (size_t j = 0; j < data->size; j++) {
+            cplx sum = 0;
+            for (size_t k = 0; k < data->size; k++) {
+                sum += data->matrix1[i][k] * data->matrix2[k][j];
+            }
+
+            // Синхронизация доступа к результату
+            if (pthread_mutex_lock(&mutex) != 0) {
+                HandleError("Ошибка блокировки мьютекса.\n");
+            }
+            result[i][j] = sum;
+            if (pthread_mutex_unlock(&mutex) != 0) {
+                HandleError("Ошибка разблокировки мьютекса.\n");
+            }
+        }
+    }
 
     return NULL;
 }
 
-void convert_to_base(const double num, char* result, int base) {
-
-    int num_abs = num;
-    int i_num = 0;
-
-    do {
-        int digit =  num_abs % base;
-
-        result[i_num++] = digit + '0';
-
-        num_abs /= base;
-
-    } while (num_abs > 0.1);
-
-    result[i_num] = '\0';
-
-    for (int i = 0; i < i_num / 2; i++) {
-        char temp = result[i];
-        result[i] = result[i_num - i - 1];
-        result[i_num - i - 1] = temp;
+int main(int argc, char **argv) {
+    if (argc != 3) {
+        HandleError("Использование: ./mutex <количество потоков> <размер матрицы>\n");
     }
 
-}
-
-int main() {
-
-    char buffer[BUFFER_SIZE];
-    ssize_t bytes_read;
-
-    // Ввод макс потоков
-    print_message("Введи максимальное количество потоков работающие в одно время: ");
-    bytes_read = read(STDIN_FILENO, buffer, BUFFER_SIZE);
-    if (bytes_read <= 0) {
-        print_error("Ошибка при чтении.\n");
+    size_t threads_count = strtoul(argv[1], NULL, 10);
+    if (threads_count > MAX_THREADS) {
+        HandleError("Ошибка: Превышено максимальное количество потоков.\n");
     }
-    buffer[bytes_read - 1] = '\0';
 
-    const int maxThreads = atoi(buffer);
+    size_t matrix_size = strtoul(argv[2], NULL, 10);
 
-    pthread_mutex_t mutex;
-    pthread_mutex_init(&mutex, NULL);
+    cplx **matrix1, **matrix2;
 
-    pthread_t threads[MAX_SIZE * MAX_SIZE];
-    __dataThread threadData[MAX_SIZE * MAX_SIZE];
+    AllocateMatrix(&matrix1, matrix_size);
+    AllocateMatrix(&matrix2, matrix_size);
+    AllocateMatrix(&result, matrix_size);
 
-    double complex A[MAX_SIZE][MAX_SIZE], B[MAX_SIZE][MAX_SIZE], C[MAX_SIZE][MAX_SIZE];
-    int N = 100; // Размер матрицы
+    srand(time(NULL));
 
-    // Инициализация матриц A, B и C
-    for (int i = 0; i < N; i++) {
-        for (int j = 0; j < N; j++) {
-            A[i][j] = i + j * I;
-            B[i][j] = (i - j) + (i + j) * I;
-            C[i][j] = 0;
+    for (size_t i = 0; i < matrix_size; i++) {
+        for (size_t j = 0; j < matrix_size; j++) {
+            matrix1[i][j] = GenerateRandomComplex();
+            matrix2[i][j] = GenerateRandomComplex();
         }
     }
 
-    int thrCount = 0;
-    struct timespec start, end;
+    if (pthread_mutex_init(&mutex, NULL) != 0) {
+        HandleError("Ошибка инициализации мьютекса.\n");
+    }
 
-    // Получаем время
-    clock_gettime(CLOCK_MONOTONIC, &start);
+    pthread_t threads[MAX_THREADS];
+    ThreadArgs thread_args[MAX_THREADS];
 
-    // Пробегаемся по всем ячейкам матриц
-    for (int i = 0; i < N; i++) {
-        for (int j = 0; j < N; j++) {
-            // Если создали столько потоков сколько нужно (maxThreads)
-            // Даем им работать и обнуляем счетчик
-            if (thrCount == maxThreads) {
-                for (int t = 0; t < maxThreads; t++) {
-                    pthread_join(threads[t], NULL);
-                }
-                thrCount = 0;
-            }
+    size_t rows_per_thread = matrix_size / threads_count;
+    for (size_t i = 0; i < threads_count; i++) {
+        thread_args[i].start_row = i * rows_per_thread;
+        thread_args[i].end_row = (i == threads_count - 1) ? matrix_size : (i + 1) * rows_per_thread;
+        thread_args[i].size = matrix_size;
+        thread_args[i].matrix1 = matrix1;
+        thread_args[i].matrix2 = matrix2;
 
-            threadData[thrCount] = (__dataThread){i, j, N, A, B, C, &mutex};
-
-            if (pthread_create(&threads[thrCount], NULL, matrix_multiply, &threadData[thrCount])) {
-                print_message("Ошибка при создании потока.\n");
-            }
-
-            thrCount++;
+        if (pthread_create(&threads[i], NULL, MatrixMultiply, &thread_args[i]) != 0) {
+            HandleError("Ошибка создания потока.\n");
         }
     }
 
-    // Выполняем то что осталось
-    for (int t = 0; t < thrCount; t++) {
-        pthread_join(threads[t], NULL);
+    for (size_t i = 0; i < threads_count; i++) {
+        if (pthread_join(threads[i], NULL) != 0) {
+            HandleError("Ошибка ожидания потока.\n");
+        }
     }
-
-    // Получаем время
-    clock_gettime(CLOCK_MONOTONIC, &end);
-
-    double timeResult = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1.0E3;
-
-    print_message("Количество потоков: ");
-    convert_to_base((double)maxThreads, buffer, 10);
-    print_message(buffer);
-    print_message("\n");
-    print_message("Затраченное время в мкс: ");
-    convert_to_base(timeResult, buffer, 10);
-    print_message(buffer);
-    print_message("\n");
 
     pthread_mutex_destroy(&mutex);
 
-    return 0;
+    for (size_t i = 0; i < matrix_size; i++) {
+        for (size_t j = 0; j < matrix_size; j++) {
+            char buffer[64];
+            snprintf(buffer, sizeof(buffer), "(%.2f + %.2fi) ", creal(result[i][j]), cimag(result[i][j]));
+            write(STDOUT_FILENO, buffer, strlen(buffer));
+        }
+        write(STDOUT_FILENO, "\n", 1);
+    }
+
+    FreeMatrix(matrix1, matrix_size);
+    FreeMatrix(matrix2, matrix_size);
+    FreeMatrix(result, matrix_size);
+
+    return EXIT_SUCCESS;
 }

@@ -1,124 +1,165 @@
+#include <pthread.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <pthread.h>
-#include <stdatomic.h>
-#include <sys/sysinfo.h>
 #include <string.h>
+#include <stdio.h>
+#include <complex.h>
+#include <stdatomic.h>
+#include <time.h>
 
-#define MAX_ARRAYS 100
-#define MAX_SIZE 1000
-#define BUFFER_SIZE 1024
+#define MAX_THREADS
+#define RAND_RANGE 10
+
+typedef double complex cplx;
 
 typedef struct {
-    int** arrays;
-    atomic_int* result;
-    int start;
-    int end;
-    int length;
-} ThreadData;
+    _Atomic double real;
+    _Atomic double imag;
+} atomic_cplx;
 
-atomic_flag lock = ATOMIC_FLAG_INIT;
+atomic_cplx **atomic_result;
 
-void handle_error(const char* msg) {
+typedef struct {
+    size_t start_row;
+    size_t end_row;
+    size_t size;
+    cplx **matrix1;
+    cplx **matrix2;
+} ThreadArgs;
+
+void HandleError(const char *msg) {
     write(STDERR_FILENO, msg, strlen(msg));
-    write(STDERR_FILENO, "\n", 1);
     exit(EXIT_FAILURE);
 }
 
-void* sum_arrays_atomic(void* arg) {
-    ThreadData* data = (ThreadData*)arg;
+void AllocateMatrix(cplx ***matrix, size_t size) {
+    *matrix = malloc(size * sizeof(cplx *));
+    if (*matrix == NULL) {
+        HandleError("Ошибка выделения памяти для матрицы.\n");
+    }
+    for (size_t i = 0; i < size; i++) {
+        (*matrix)[i] = malloc(size * sizeof(cplx));
+        if ((*matrix)[i] == NULL) {
+            HandleError("Ошибка выделения памяти для строки матрицы.\n");
+        }
+    }
+}
 
-    for (int i = data->start; i < data->end; i++) {
-        for (int j = 0; j < data->length; j++) {
-            while (atomic_flag_test_and_set(&lock));
-            atomic_fetch_add(&data->result[j], data->arrays[i][j]);
-            atomic_flag_clear(&lock);
+void FreeMatrix(cplx **matrix, size_t size) {
+    for (size_t i = 0; i < size; i++) {
+        free(matrix[i]);
+    }
+    free(matrix);
+}
+
+void AllocateAtomicMatrix(atomic_cplx ***matrix, size_t size) {
+    *matrix = malloc(size * sizeof(atomic_cplx *));
+    if (*matrix == NULL) {
+        HandleError("Ошибка выделения памяти для атомарной матрицы.\n");
+    }
+    for (size_t i = 0; i < size; i++) {
+        (*matrix)[i] = malloc(size * sizeof(atomic_cplx));
+        if ((*matrix)[i] == NULL) {
+            HandleError("Ошибка выделения памяти для строки атомарной матрицы.\n");
+        }
+    }
+}
+
+void FreeAtomicMatrix(atomic_cplx **matrix, size_t size) {
+    for (size_t i = 0; i < size; i++) {
+        free(matrix[i]);
+    }
+    free(matrix);
+}
+
+void *MatrixMultiply(void *args) {
+    ThreadArgs *data = (ThreadArgs *)args;
+
+    for (size_t i = data->start_row; i < data->end_row; i++) {
+        for (size_t j = 0; j < data->size; j++) {
+            cplx sum = 0;
+            for (size_t k = 0; k < data->size; k++) {
+                sum += data->matrix1[i][k] * data->matrix2[k][j];
+            }
+
+            atomic_store(&atomic_result[i][j].real, creal(sum));
+            atomic_store(&atomic_result[i][j].imag, cimag(sum));
         }
     }
 
     return NULL;
 }
 
-int main(int argc, char* argv[]) {
-    if (argc < 4) {
-        const char* usage = "Usage: <number of arrays> <array length> <number of threads>\n";
-        write(STDERR_FILENO, usage, strlen(usage));
-        return EXIT_FAILURE;
+cplx GenerateRandomComplex() {
+    double real = (rand() % (2 * RAND_RANGE + 1)) - RAND_RANGE;
+    double imag = (rand() % (2 * RAND_RANGE + 1)) - RAND_RANGE;
+    return real + imag * I;
+}
+
+int main(int argc, char **argv) {
+    if (argc != 3) {
+        HandleError("Использование: ./atomic <количество потоков> <размер матрицы>\n");
     }
 
-    int num_arrays = atoi(argv[1]);
-    int array_length = atoi(argv[2]);
-    int num_threads = atoi(argv[3]);
-
-    if (num_arrays <= 0 || array_length <= 0 || num_threads <= 0) {
-        handle_error("Error: All input values must be positive integers.");
+    size_t threads_count = strtoul(argv[1], NULL, 10);
+    if (threads_count > MAX_THREADS) {
+        HandleError("Ошибка: Превышено максимальное количество потоков.\n");
     }
 
-    if (num_arrays > MAX_ARRAYS || array_length > MAX_SIZE) {
-        handle_error("Error: Exceeded maximum array or size limit.");
-    }
+    size_t matrix_size = strtoul(argv[2], NULL, 10);
 
-    int max_threads = get_nprocs();
-    if (num_threads > max_threads) {
-        char buffer[BUFFER_SIZE];
-        int len = snprintf(buffer, BUFFER_SIZE, 
-            "Error: Number of threads (%d) exceeds the number of logical cores (%d).\n", 
-            num_threads, max_threads);
-        write(STDERR_FILENO, buffer, len);
-        return EXIT_FAILURE;
-    }
+    cplx **matrix1, **matrix2;
 
-    int** arrays = (int**)malloc(num_arrays * sizeof(int*));
-    if (arrays == NULL) handle_error("Error allocating memory for arrays.");
+    AllocateMatrix(&matrix1, matrix_size);
+    AllocateMatrix(&matrix2, matrix_size);
+    AllocateAtomicMatrix(&atomic_result, matrix_size);
 
-    for (int i = 0; i < num_arrays; i++) {
-        arrays[i] = (int*)malloc(array_length * sizeof(int));
-        if (arrays[i] == NULL) handle_error("Error allocating memory for an array.");
-        for (int j = 0; j < array_length; j++) {
-            arrays[i][j] = rand() % 10;
+    srand(time(NULL));
+
+    for (size_t i = 0; i < matrix_size; i++) {
+        for (size_t j = 0; j < matrix_size; j++) {
+            matrix1[i][j] = GenerateRandomComplex();
+            matrix2[i][j] = GenerateRandomComplex();
         }
     }
 
-    atomic_int* result = (atomic_int*)calloc(array_length, sizeof(atomic_int));
-    if (result == NULL) handle_error("Error allocating memory for result.");
+    pthread_t threads[MAX_THREADS];
+    ThreadArgs thread_args[MAX_THREADS];
 
-    pthread_t threads[num_threads];
-    ThreadData thread_data[num_threads];
-    int chunk_size = (num_arrays + num_threads - 1) / num_threads;
+    size_t rows_per_thread = matrix_size / threads_count;
+    for (size_t i = 0; i < threads_count; i++) {
+        thread_args[i].start_row = i * rows_per_thread;
+        thread_args[i].end_row = (i == threads_count - 1) ? matrix_size : (i + 1) * rows_per_thread;
+        thread_args[i].size = matrix_size;
+        thread_args[i].matrix1 = matrix1;
+        thread_args[i].matrix2 = matrix2;
 
-    for (int i = 0; i < num_threads; i++) {
-        thread_data[i].arrays = arrays;
-        thread_data[i].result = result;
-        thread_data[i].start = i * chunk_size;
-        thread_data[i].end = (i + 1) * chunk_size > num_arrays ? num_arrays : (i + 1) * chunk_size;
-        thread_data[i].length = array_length;
-
-        if (pthread_create(&threads[i], NULL, sum_arrays_atomic, &thread_data[i]) != 0) {
-            handle_error("Error creating thread.");
+        if (pthread_create(&threads[i], NULL, MatrixMultiply, &thread_args[i]) != 0) {
+            HandleError("Ошибка создания потока.\n");
         }
     }
 
-    for (int i = 0; i < num_threads; i++) {
+    for (size_t i = 0; i < threads_count; i++) {
         if (pthread_join(threads[i], NULL) != 0) {
-            handle_error("Error joining thread.");
+            HandleError("Ошибка ожидания потока.\n");
         }
     }
 
-    char buffer[BUFFER_SIZE];
-    int len = 0;
-    len += snprintf(buffer + len, BUFFER_SIZE - len, "Result array:\n");
-    for (int i = 0; i < array_length; i++) {
-        len += snprintf(buffer + len, BUFFER_SIZE - len, "%d ", atomic_load(&result[i]));
-    }
-    len += snprintf(buffer + len, BUFFER_SIZE - len, "\n");
+    for (size_t i = 0; i < matrix_size; i++) {
+        for (size_t j = 0; j < matrix_size; j++) {
+            double real = atomic_load(&atomic_result[i][j].real);
+            double imag = atomic_load(&atomic_result[i][j].imag);
 
-    write(STDOUT_FILENO, buffer, len);
-
-    for (int i = 0; i < num_arrays; i++) {
-        free(arrays[i]);
+            char buffer[64];
+            snprintf(buffer, sizeof(buffer), "(%.2f + %.2fi) ", real, imag);
+            write(STDOUT_FILENO, buffer, strlen(buffer));
+        }
+        write(STDOUT_FILENO, "\n", 1);
     }
-    free(arrays);
-    free(result);
+
+    FreeMatrix(matrix1, matrix_size);
+    FreeMatrix(matrix2, matrix_size);
+    FreeAtomicMatrix(atomic_result, matrix_size);
 
     return EXIT_SUCCESS;
 }
