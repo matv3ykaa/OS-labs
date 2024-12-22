@@ -3,7 +3,6 @@
 #include <dlfcn.h>
 #include <time.h>
 
-// Определяем типы функций из динамических библиотек
 typedef void* (*malloc_func)(size_t);
 typedef void (*free_func)(void*);
 typedef void (*print_free_list_func)();
@@ -14,14 +13,12 @@ typedef void (*print_free_list_func)();
 void benchmark_allocator(const char* library_path) {
     printf("Testing allocator from library: %s\n", library_path);
 
-    // Загружаем динамическую библиотеку
     void* library = dlopen(library_path, RTLD_LAZY);
     if (!library) {
         fprintf(stderr, "Error loading library: %s\n", dlerror());
         exit(EXIT_FAILURE);
     }
 
-    // Загружаем символы функций
     malloc_func my_malloc = (malloc_func)dlsym(library, "my_malloc");
     free_func my_free = (free_func)dlsym(library, "my_free");
 
@@ -31,12 +28,10 @@ void benchmark_allocator(const char* library_path) {
         exit(EXIT_FAILURE);
     }
 
-    // Начало бенчмарка
     void* allocations[NUM_ALLOCATIONS];
     size_t sizes[NUM_ALLOCATIONS];
     clock_t start_time, end_time;
 
-    // Фаза выделения памяти
     printf("Allocating memory...\n");
     start_time = clock();
     for (int i = 0; i < NUM_ALLOCATIONS; i++) {
@@ -50,7 +45,6 @@ void benchmark_allocator(const char* library_path) {
     end_time = clock();
     printf("Allocation completed in %.6f seconds\n", (double)(end_time - start_time) / CLOCKS_PER_SEC);
 
-    // Фаза освобождения памяти
     printf("Freeing memory...\n");
     start_time = clock();
     for (int i = 0; i < NUM_ALLOCATIONS; i++) {
@@ -61,7 +55,6 @@ void benchmark_allocator(const char* library_path) {
     end_time = clock();
     printf("Deallocation completed in %.6f seconds\n", (double)(end_time - start_time) / CLOCKS_PER_SEC);
 
-    // Освобождение ресурсов
     dlclose(library);
 }
 
@@ -73,10 +66,8 @@ int main(int argc, char** argv) {
 
     srand(time(NULL));
 
-    // Бенчмарк для First-Fit аллокатора
     benchmark_allocator(argv[1]);
 
-    // Бенчмарк для Best-Fit аллокатора
     benchmark_allocator(argv[2]);
 
     return EXIT_SUCCESS;

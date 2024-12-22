@@ -2,12 +2,9 @@
 #include <stdlib.h>
 #include <dlfcn.h>
 
-// Определяем типы функций из динамических библиотек
 typedef void* (*malloc_func)(size_t);
 typedef void (*free_func)(void*);
 typedef void (*print_free_list_func)();
-
-#define MEMORY_POOL_SIZE 1024
 
 int main(int argc, char** argv) {
     if (argc != 2) {
@@ -15,14 +12,12 @@ int main(int argc, char** argv) {
         exit(EXIT_FAILURE);
     }
 
-    // Загружаем динамическую библиотеку
     void* library = dlopen(argv[1], RTLD_LAZY);
     if (!library) {
         fprintf(stderr, "Error loading library: %s\n", dlerror());
         exit(EXIT_FAILURE);
     }
 
-    // Загружаем символы функций
     malloc_func my_malloc = (malloc_func)dlsym(library, "my_malloc");
     free_func my_free = (free_func)dlsym(library, "my_free");
     print_free_list_func print_free_list = (print_free_list_func)dlsym(library, "print_free_list");
@@ -33,7 +28,6 @@ int main(int argc, char** argv) {
         exit(EXIT_FAILURE);
     }
 
-    // Тестируем аллокатор
     printf("[Test] Initial free list:\n");
     print_free_list();
 
@@ -55,7 +49,6 @@ int main(int argc, char** argv) {
     printf("Freed memory at %p\n", ptr2);
     print_free_list();
 
-    // Закрываем библиотеку
     dlclose(library);
     return 0;
 }
